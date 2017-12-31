@@ -1,17 +1,17 @@
-import time, sys
 import numpy as np
 import pygame
-import util
+import threading
+
 class Environment(object):
     '''
     1. recieve block
     2. check if rows of block'position is full, if full, eliminate and update
     3. check if block has reach bottom
     '''
-    def __init__(self, width, height):
+    def __init__(self, height, width):
         self.width = width
         self.height = height
-        self.type_num = 5
+        self.type_num = 6
         self.background = np.zeros((height, width), dtype=int) # except current block
         self.spaces = np.zeros((height, width), dtype=int) # add block when it reaches floor
         self.moving_block = False
@@ -19,10 +19,15 @@ class Environment(object):
         self.count = 0
         self.scores = 0
         self.gameover = False
+        self.period_flag = False
+        self.timer = None
     
     def generate_new_block(self):
+        if self.timer:
+            self.timer.cancel()
         block_type = np.random.randint(self.type_num)
         direction = np.random.randint(5)
+        #block = FBlock(self.width / 2, 2, direction)
         if block_type == 0:
             block = LongBlock(self.width / 2, 2, direction)
         elif block_type == 1:
@@ -33,35 +38,54 @@ class Environment(object):
             block = ZBlock(self.width / 2, 2, direction)
         elif block_type == 4:
             block = TBlock(self.width / 2, 2, direction)
+        elif block_type == 5:
+            block = LBlock(self.width / 2, 2, direction)
+        block.getRealValue()
+        self.period_flag = False
+        self.falldown(block, 'normal')
         return block
 
-    def falldown(self, block):
-        # y logic
-        size = block.realValues.shape
-        col_left = block.x - block.centor[1]
-        col_right = col_left + size[1] - 1
-        # print 'self.block_last_row: ', self.block_last_row
+    def updateEnvironment(self, block, action):
+        '''
+        1. call falldown every 0.3s to make block falldown
+        2. move the block according action
+        3. update matrix
+        '''
 
-        #####
-        # need to check all rows, not only last one
+        if self.period_flag is False:
+            self.period_flag = True
+            self.timer = threading.Timer(0.3, self.falldown, [block, 'normal'])
+            self.timer.start()
+
+        if action == 3:
+            for _ in range(3):
+                bottom = self.falldown(block, 'speedup')
+                if bottom is True:
+                    break
+        else:
+            self.move_collision_check(block, action)
+        
+    def falldown(self, block, method):
+        if method == 'normal':
+            self.period_flag = False
+        bottom_flag = False
         flag = self.move_collision_check(block, 0)
         if flag == 1:
             # reach bottom
-            # update background and send new block
-            # print 'reach bottom'
+            # eliminate only when block reach bottom!!
+            last_row = block.centor[0] -block.y
+            self.check_and_eliminate(range(last_row, last_row - block.realValues.shape[0], -1))
+
             self.background = np.copy(self.spaces)
             self.moving_block = False
+            bottom_flag = True
 
-            #self.block_last_row += 1
-        #print '+ + + ', self.block_last_row
-        self.check_and_eliminate(range(self.block_last_row, self.block_last_row - size[0], -1))
-        self.updateSpace(block, 0)
-    
+        return bottom_flag
+
     def move_collision_check(self, block, action):
         # take action, check if two matrix collapse
         # return 1 if collision, return 0 if not
 
-        #self.block_last_row == self.height - 1
         if action == -1 or action == 1:
             block.move(action)
         elif action == 2:
@@ -92,7 +116,9 @@ class Environment(object):
                 block.y += 1
             return 1
 
-    def updateSpace(self, block, keyBoard):
+        self.updateSpace(block)
+
+    def updateSpace(self, block):
         '''
         update space matrix
         block: block array
@@ -100,63 +126,52 @@ class Environment(object):
         pos: block's centor position in bg(x, y)
         bg: bg array
         '''
-        speed = 1
-        if keyBoard == 3:
-            speed = 3
-        for _ in range(speed):
-            collision = self.move_collision_check(block, keyBoard)
-            if not collision:
+        # block's position in background
+        last_row = block.centor[0] -block.y
+        first_row = last_row - block.realValues.shape[0] + 1
+        first_col = block.x - block.centor[1]
+        last_col = block.x - block.centor[1] + block.realValues.shape[1] - 1
+        value = np.copy(self.background)
 
-                # block's position in background
-                last_row = block.centor[0] -block.y
-                first_row = last_row - block.realValues.shape[0] + 1
-                first_col = block.x - block.centor[1]
-                last_col = block.x - block.centor[1] + block.realValues.shape[1] - 1
+        # add to background
+        for i, row in enumerate(range(first_row, last_row + 1)):
+            if row < 0:
+                continue
+            for j, col in enumerate(range(first_col, last_col + 1)):
+                if block.realValues[i, j]: 
+                    value[row, col] = block.realValues[i, j] 
+        self.spaces = value
+        self.block_last_row = block.centor[0] - block.y    
 
-                value = np.copy(self.background)
-                #print first_row, last_row, first_col, last_col
-                # add to background
-                for i, row in enumerate(range(first_row, last_row + 1)):
-                    if row < 0:
-                        continue
-                    for j, col in enumerate(range(first_col, last_col + 1)):
-                        #print row, col, i, j
-                        #print value
-                        value[row, col] += block.realValues[i, j] 
-                self.spaces = value
-
-                # last row
-                self.block_last_row = block.centor[0] - block.y
-                if self.block_last_row < 0:
-                    self.gameover = True
-                    print '--------game over--------------'
-                    # self.quit = 1
+        # check game over or not
+        if self.block_last_row < 0:
+            self.gameover = True
+            print '--------game over--------------'
+            # self.quit = 1
 
     def check_and_eliminate(self, rows):
-        # print 'check rows: ', rows
+        matrix = np.copy(self.spaces)
         for row in rows:
             if self._check_full(row) and row > 0:
                 # full and eliminate
-                # print 'eliminate row ', row
-                up = self.background[0: row, :]
+                up = matrix[0: row, :]
                 if row < self.height - 1:
-                    down = self.background[row+1: , :]
-                    self.background = np.concatenate((up, down), axis=0)
+                    down = matrix[row+1: , :]
+                    matrix = np.concatenate((up, down), axis=0)
                 else:
-                    self.background = np.copy(up)
-        rows = self.height - self.background.shape[0]
-        self.scores += rows * 100
-        if rows: 
+                    matrix = np.copy(up)
+        eliminated_rows = self.height - matrix.shape[0]
+        self.scores += eliminated_rows * 100
+        if eliminated_rows: 
             print self.scores
-            self.background = np.concatenate((np.zeros((rows, self.width), dtype=int), self.background))
+            self.spaces = np.concatenate((np.zeros((eliminated_rows, self.width), dtype=int), matrix))
     
     def _check_full(self, row):
         # return 0 if row-th is not full
         for column in range(self.width):
             if self.spaces[row, column] == 0:
                 return 0
-        else:
-            return 1
+        return 1
 
 
 class Block(object):
@@ -172,7 +187,7 @@ class Block(object):
     
     def _init_values(self):
         for i in range(self.direction):
-            self.values = np.transpose(self.values)
+            self.values = np.rot90(self.values)
     
     def _set_init_position(self):
         # set last row of block to be the first row of env,
@@ -297,10 +312,24 @@ class ZBlock(Block):
         self._set_init_position()
 
 
+class LBlock(Block):
+    def __init__(self, x, y, direction):
+        super(LBlock, self).__init__(blockType=1, x=x, y=y, direction=direction)
+        # when direction is 0
+        self.values = np.array(((0, 0, 0, 0, 0),
+                                (0, 0, 6, 0, 0),
+                                (0, 0, 6, 0, 0),
+                                (0, 0, 6, 6, 0),
+                                (0, 0, 0, 0, 0)), dtype=int)
+        self._init_values()
+        self._set_init_position()
+
+
 class GUI(object):
     def __init__(self, height, width):
         pygame.init()
-        self.color_map = ((255, 255, 255), (50, 50, 0), (0, 10, 80), (20, 80, 10), (80, 0, 10), (70, 10, 20))
+        self.color_map = ((255, 255, 255), (50, 50, 0), (0, 10, 80), 
+                          (20, 80, 10), (80, 0, 10), (70, 10, 20), (50, 50, 80))
         self.pixel_size = 20
         self.keyBoard = 0
         self.width = width
@@ -314,14 +343,13 @@ class GUI(object):
         self.screen.fill((0, 0, 0))
 
         # draw matrix
+        if matrix.shape != (self.height, self.width):
+            return 0
         for row in range(self.height):
             for column in range(self.width):
                 value = matrix[row, column]
                 if value != 0:
                     baseRect = (column * self.pixel_size, row * self.pixel_size, self.pixel_size, self.pixel_size)
-                    try:
-                        color = self.color_map[value]
-                    except Exception as e:
-                        print value
+                    color = self.color_map[value]
                     pygame.draw.rect(self.screen, color, baseRect)
         pygame.display.update()
