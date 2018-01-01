@@ -14,6 +14,7 @@ class DQN(object):
         self.replace_target_iter = 300
         self.batch_size = 32
         self.learn_step_counter = 0
+        self.action_num = 4 # left, right, rotate, noAction
 
         # memory restore [s, a, r, s']
         self.memory = [np.zeros((20, 16, 1)), 1, 1, np.zeros((20, 16, 1))] * self.memory_size
@@ -51,8 +52,8 @@ class DQN(object):
             b_conv2 = tf.get_variable('b2', [64], dtype=tf.float32, initializer=b_initializer, collections=collection1)
             w_fc3 = tf.get_variable('w3', [2240, 128], dtype=tf.float32, initializer=w_initializer, collections=collection1)
             b_fc3 = tf.get_variable('b3', [128], dtype=tf.float32, initializer=b_initializer, collections=collection1)
-            w_out = tf.get_variable('w_out', [128, 4], dtype=tf.float32, initializer=w_initializer, collections=collection1)
-            b_out = tf.get_variable('b_out', [4], dtype=tf.float32, initializer=b_initializer, collections=collection1)
+            w_out = tf.get_variable('w_out', [128, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection1)
+            b_out = tf.get_variable('b_out', [self.action_num], dtype=tf.float32, initializer=b_initializer, collections=collection1)
 
             # 9 x 7
             conv1 = tf.nn.relu(tf.nn.conv2d(self.s, 
@@ -80,8 +81,8 @@ class DQN(object):
             b_conv2 = tf.get_variable('b2', [64], dtype=tf.float32, initializer=b_initializer, collections=collection2)
             w_fc3 = tf.get_variable('w3', [2240, 128], dtype=tf.float32, initializer=w_initializer, collections=collection2)
             b_fc3 = tf.get_variable('b3', [128], dtype=tf.float32, initializer=b_initializer, collections=collection2)
-            w_out = tf.get_variable('w_out', [128, 4], dtype=tf.float32, initializer=w_initializer, collections=collection2)
-            b_out = tf.get_variable('b_out', [4], dtype=tf.float32, initializer=b_initializer, collections=collection2)
+            w_out = tf.get_variable('w_out', [128, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection2)
+            b_out = tf.get_variable('b_out', [self.action_num], dtype=tf.float32, initializer=b_initializer, collections=collection2)
 
             # 9 x 7
             conv1 = tf.nn.relu(tf.nn.conv2d(self.s_, 
@@ -113,13 +114,20 @@ class DQN(object):
 
     def chooseAction(self, observation):
         observation = observation.reshape(1, 20, 16, 1)
-        action = ActionMap.noAction
+        action = None
         if np.random.uniform() < self.epsilion:
             q_values = self.sess.run(self.q_eval, feed_dict={self.s: observation})
-            action = ActionMap(np.argmax(q_values))
+            if np.argmax(q_values) == 3:
+                # no speedup, change to noAction
+                action = ActionMap.noAction
+            else:
+                action = ActionMap(np.argmax(q_values))
         else:
-            action = ActionMap(np.random.randint(0, 4))
-        print 'ddd', action
+            tmp = np.random.randint(0, self.action_num)
+            if tmp == 3:
+                action = ActionMap.noAction
+            else:
+                action = ActionMap(tmp)
         return action
 
     def store(self, state, action, reward, state_):

@@ -2,14 +2,14 @@ import numpy as np
 import pygame
 import threading
 from enum import Enum
-
+import sys
 
 class ActionMap(Enum):
-    noAction = 0
-    left = 1
-    right = 2
-    rotate = 3
-    speedup = 4
+    left = 0
+    right = 1
+    rotate = 2
+    speedup = 3
+    noAction = 4
 
 
 class Environment(object):
@@ -18,7 +18,7 @@ class Environment(object):
     2. check if rows of block'position is full, if full, eliminate and update
     3. check if block has reach bottom
     '''
-    def __init__(self, height, width):
+    def __init__(self, height, width, updatecallback):
         self.width = width
         self.height = height
         self.type_num = 6
@@ -26,89 +26,107 @@ class Environment(object):
         self.spaces = np.zeros((height, width), dtype=int) # add block when it reaches floor
         self.moving_block = False
         self.scores = 0
+        self.network_scores = 0
         self.gameover = False
-        self.period_flag = False
         self.timer = None
-        self.block = self.generate_new_block()
-    
+        self.lock = threading.Lock()
+        self.fall_period = 0.03
+        self.block = None
+        self.updatecallback = updatecallback
+        self.generate_new_block()
+
     def generate_new_block(self):
         if self.timer:
             self.timer.cancel()
         block_type = np.random.randint(self.type_num)
         direction = np.random.randint(5)
         if block_type == 0:
-            block = LongBlock(self.width / 2, 2, direction)
+            self.block = LongBlock(self.width / 2, 2, direction)
         elif block_type == 1:
-            block = SquareBlock(self.width / 2, 2, direction)
+            self.block = SquareBlock(self.width / 2, 2, direction)
         elif block_type == 2:
-            block = FBlock(self.width / 2, 2, direction)
+            self.block = FBlock(self.width / 2, 2, direction)
         elif block_type == 3:
-            block = ZBlock(self.width / 2, 2, direction)
+            self.block = ZBlock(self.width / 2, 2, direction)
         elif block_type == 4:
-            block = TBlock(self.width / 2, 2, direction)
+            self.block = TBlock(self.width / 2, 2, direction)
         elif block_type == 5:
-            block = LBlock(self.width / 2, 2, direction)
-        block.getRealValue()
-        self.period_flag = False
-        self.falldown(block, 'normal')
-        return block
+            self.block = LBlock(self.width / 2, 2, direction)
+        self._falldown()
 
-    def updateEnvironment(self, action):
+    def takeAction(self, action):
         '''
-        1. check if there is a moving block, if not, generate one
-        2. call falldown every 0.3s to make block falldown
-        3. move the block according action
-        4. update matrix
+        1. move the block according action
+        2. update matrix
         '''
-        #print action
-        if self.moving_block is False:   
-            self.block = self.generate_new_block()
-            self.moving_block = True
-
-        if self.period_flag is False:
-            self.period_flag = True
-            self.timer = threading.Timer(0.1, self.falldown, [self.block, 'normal'])
-            self.timer.start()
-
+        if action == ActionMap.noAction:
+            return 
         if action == ActionMap.speedup:
             for _ in range(3):
-                bottom = self.falldown(self.block, 'speedup')
-                if bottom is True:
+                if self.falldown():
                     break
         else:
+            self.network_scores -= 20
+            self.lock.acquire()
             self.move_collision_check(self.block, action)
+            self.lock.release()
+        self.updateEnvironment()
         
-        return self.spaces, self.scores, self.gameover
+    def updateEnvironment(self):
+        # update callback
+        self.updatecallback(self.spaces)
+    
+    def getGameState(self):
+        return self.spaces, self.network_scores, self.gameover 
         
-    def falldown(self, block, method):
-        if method == 'normal':
-            self.period_flag = False
-        bottom_flag = False
-        flag = self.move_collision_check(block, ActionMap.noAction)
-        if flag == 1:
-            # reach bottom
+    def falldown(self):
+        """
+        return True if block has reached bottom
+        """
+        self.lock.acquire()
+        self.block.y -= 1
+
+        flag = False
+        if self.check_reach_bottom():
+            # has reached bottom, restore y
+            self.block.y += 1
+            print self.block.y
+            self.network_scores -= 2 * (self.block.y)
             # eliminate only when block reach bottom!!
-            last_row = block.centor[0] -block.y
-            if last_row >= 20:
-                print last_row
-            self.check_and_eliminate(range(last_row, last_row - block.realValues.shape[0], -1))
+            last_row = self.block.centor[0] -self.block.y
+
+            self.check_and_eliminate(range(last_row, last_row - self.block.realValues.shape[0], -1))
 
             self.background = np.copy(self.spaces)
-            self.moving_block = False
-            bottom_flag = True
+            # check game over or not
+            for j in range(self.width):
+                if self.background[0, j] != 0:
+                    self.gameover = True
+                    self.timer.cancel()
+                    print '--------game over--------------'
+                    break
+            self.lock.release()
+            if self.gameover is False:
+                self.generate_new_block()
+            flag = True
 
-        return bottom_flag
+        if self.gameover is False:
+            self.updateSpace(self.block)
+            self.updateEnvironment()
+
+        if flag is False:
+            self.lock.release()
+        return flag
 
     def move_collision_check(self, block, action):
         # take action, check if two matrix collapse
         # return 1 if collision, return 0 if not
-
         if action == ActionMap.left or action == ActionMap.right:
             block.move(action)
         elif action == ActionMap.rotate:
             block.changeDirection(1)
         elif action == ActionMap.noAction:
-            block.y -= 1
+            pass
     
         last_row = block.centor[0] -block.y
         first_row = last_row - block.realValues.shape[0] + 1
@@ -131,8 +149,8 @@ class Environment(object):
                 block.move(ActionMap.left)
             elif action == ActionMap.rotate:
                 block.changeDirection(-1)
-            elif action == ActionMap.noAction:
-                block.y += 1
+            else:
+                raise Exception('Wrong action!!')
             return 1
             
         self.updateSpace(block)
@@ -161,11 +179,6 @@ class Environment(object):
                     value[row, col] = block.realValues[i, j] 
         self.spaces = value   
 
-        # check game over or not
-        if last_row < 0:
-            self.gameover = True
-            print '--------game over--------------'
-
     def check_and_eliminate(self, rows):
         matrix = np.copy(self.spaces)
         for row in rows:
@@ -179,10 +192,26 @@ class Environment(object):
                     matrix = np.copy(up)
         eliminated_rows = self.height - matrix.shape[0]
         self.scores += eliminated_rows * 100
+        self.network_scores += eliminated_rows * 100
         if eliminated_rows: 
             print self.scores
             self.spaces = np.concatenate((np.zeros((eliminated_rows, self.width), dtype=int), matrix))
     
+    def check_reach_bottom(self):
+        last_row = self.block.centor[0] -self.block.y
+        first_row = last_row - self.block.realValues.shape[0] + 1
+        first_col = self.block.x - self.block.centor[1]
+        last_col = self.block.x - self.block.centor[1] + self.block.realValues.shape[1] - 1
+        if last_row >= self.height:
+            return True
+        for i, row in enumerate(range(max(0, first_row), min(self.height, last_row + 1))):
+            for j, col in enumerate(range(max(0, first_col), min(self.width, last_col + 1))):
+                if self.background[row, col] and self.block.realValues[i, j]:
+                    # collapse
+                    return True
+            
+        return False
+
     def _check_full(self, row):
         # return 0 if row-th is not full
         for column in range(self.width):
@@ -190,6 +219,11 @@ class Environment(object):
                 return 0
         return 1
 
+    def _falldown(self):  
+        if self.gameover is False:
+            self.timer = threading.Timer(self.fall_period, self._falldown, [])
+            self.timer.start()
+            self.falldown()
 
 class Block(object):
     def __init__(self, blockType, x, y, direction):
@@ -208,7 +242,7 @@ class Block(object):
     
     def _set_init_position(self):
         # set last row of block to be the first row of env,
-        # so centor is self.centor[0]
+        # so centor is self.realValues.shape[0] - self.centor[0]
         self.getRealValue()
         self.y = self.centor[0]
     
@@ -226,6 +260,8 @@ class Block(object):
             self.y -= 1
     
     def getRealValue(self):
+        # centor 
+        #print self.values
         self.realValues = None
         self.centor = [2, 2]
         # delete empty row

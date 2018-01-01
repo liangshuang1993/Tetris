@@ -2,12 +2,12 @@ from network import DQN
 from environment import *
 import pygame 
 import sys
+import time
 
 
 class DQNGame(object):
     def __init__(self, epochs = 1000):
         self.epochs = epochs
-
         self.network = DQN()
 
     def preprocess(self, matrix):
@@ -24,9 +24,9 @@ class DQNGame(object):
         for epoch in range(self.epochs):
             step = 0
             self.vis = GUI(20, 16)
-            self.env = Environment(20, 16)
+            self.env = Environment(20, 16, self.vis.draw)
             # get initial state
-            spaces, score, gameover = self.env.updateEnvironment(4)
+            spaces, score, gameover = self.env.getGameState()
             observation = self.preprocess(spaces)
             last_score = score
             while True:
@@ -34,15 +34,15 @@ class DQNGame(object):
                     if event.type == pygame.QUIT: 
                         print 'exit'
                         sys.exit()
-                self.vis.draw(self.env.spaces)
 
                 action = self.network.chooseAction(observation)
+                print action
                 #print 'action: ', action
-
-                spaces_, score, gameover = self.env.updateEnvironment(action)
+                self.env.takeAction(action)
+                spaces_, score, gameover = self.env.getGameState()
                 observation_ = self.preprocess(spaces_)
                 reward = score - last_score
-                #print 'reward: ', reward
+                print 'reward: ', reward
 
                 self.network.store(observation, action, reward, observation_)
 
@@ -50,11 +50,11 @@ class DQNGame(object):
                     self.network.learn()
                 
                 observation = observation_
-
+                last_score = score
                 if gameover:
                     break
                 step += 1
-            
+                time.sleep(0.004)
             #env.destroy()
 
 if __name__ == '__main__':
