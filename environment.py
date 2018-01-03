@@ -21,7 +21,7 @@ class Environment(object):
     def __init__(self, height, width, updatecallback):
         self.width = width
         self.height = height
-        self.type_num = 6
+        self.type_num = 1
         self.background = np.zeros((height, width), dtype=int) # except current block
         self.spaces = np.zeros((height, width), dtype=int) # add block when it reaches floor
         self.moving_block = False
@@ -30,19 +30,22 @@ class Environment(object):
         self.gameover = False
         self.timer = None
         self.lock = threading.Lock()
-        self.fall_period = 0.03
+        self.fall_period =0.004# 0.008
         self.block = None
         self.updatecallback = updatecallback
+        self.fistFourBlockNum = 0
         self.generate_new_block()
+        self.current_height = self.height - 3
+        self.highest = self.height - 3
 
     def generate_new_block(self):
         if self.timer:
             self.timer.cancel()
         block_type = np.random.randint(self.type_num)
         direction = np.random.randint(5)
-        if block_type == 0:
+        if block_type == 1:
             self.block = LongBlock(self.width / 2, 2, direction)
-        elif block_type == 1:
+        elif block_type == 0:
             self.block = SquareBlock(self.width / 2, 2, direction)
         elif block_type == 2:
             self.block = FBlock(self.width / 2, 2, direction)
@@ -52,6 +55,7 @@ class Environment(object):
             self.block = TBlock(self.width / 2, 2, direction)
         elif block_type == 5:
             self.block = LBlock(self.width / 2, 2, direction)
+        self.fistFourBlockNum += 1
         self._falldown()
 
     def takeAction(self, action):
@@ -66,7 +70,7 @@ class Environment(object):
                 if self.falldown():
                     break
         else:
-            self.network_scores -= 20
+            #self.network_scores -= 3
             self.lock.acquire()
             self.move_collision_check(self.block, action)
             self.lock.release()
@@ -90,20 +94,59 @@ class Environment(object):
         if self.check_reach_bottom():
             # has reached bottom, restore y
             self.block.y += 1
-            print self.block.y
-            self.network_scores -= 2 * (self.block.y)
+            #print self.block.y
             # eliminate only when block reach bottom!!
             last_row = self.block.centor[0] -self.block.y
 
-            self.check_and_eliminate(range(last_row, last_row - self.block.realValues.shape[0], -1))
+            # scores
+            self.network_scores -= 5 * (20 - last_row)
+            # if self.fistFourBlockNum <= 4:
+            #     if last_row < self.height - 1:
+            #         self.network_scores -= 200
+            #     else:
+            #         self.network_scores += 200
 
+            # check gap
+            first_col = self.block.x - self.block.centor[1]
+            last_col = self.block.x - self.block.centor[1] + self.block.realValues.shape[1] - 1
+            first_row = last_row - self.block.realValues.shape[0] + 1
+            # flag = False
+            # for j in range(first_col, last_col):
+            #     if self.background[last_row - 1, j] != 0:
+            #         self.network_scores -= 100
+            #         flag = True
+            # if flag is False:
+            #     self.network_scores += 100
+
+            if self.check_left_right_empty(first_col, last_col, first_row, last_row):
+                self.network_scores -= 50
+            
+            # check if it fill some space
+            fillGridNum = self.fillBackgroundGrid(first_col, last_col, first_row, last_row)
+
+            self.check_and_eliminate(range(last_row, last_row - self.block.realValues.shape[0], -1))
             self.background = np.copy(self.spaces)
+
+            # scores
+            if self.check_higher():
+                #print self.height_sum
+                self.network_scores -= 200
+            else:
+                self.network_scores += 300 * fillGridNum
+
+
             # check game over or not
             for j in range(self.width):
                 if self.background[0, j] != 0:
-                    self.gameover = True
-                    self.timer.cancel()
+                    self.gameover = True           
+                     # check gap
+                    # for row in range(1, self.height):
+                    #     for j in range(self.width):
+                    #         if self.background[row, j] == 0:
+                    #             self.network_scores -= 5
+                    # self.timer.cancel()
                     print '--------game over--------------'
+                    self.network_scores -= 300
                     break
             self.lock.release()
             if self.gameover is False:
@@ -164,6 +207,8 @@ class Environment(object):
         bg: bg array
         '''
         # block's position in background
+        if block is None:
+            return
         last_row = block.centor[0] -block.y
         first_row = last_row - block.realValues.shape[0] + 1
         first_col = block.x - block.centor[1]
@@ -192,9 +237,9 @@ class Environment(object):
                     matrix = np.copy(up)
         eliminated_rows = self.height - matrix.shape[0]
         self.scores += eliminated_rows * 100
-        self.network_scores += eliminated_rows * 100
+        self.network_scores += eliminated_rows * 1000
         if eliminated_rows: 
-            print self.scores
+            #print self.scores
             self.spaces = np.concatenate((np.zeros((eliminated_rows, self.width), dtype=int), matrix))
     
     def check_reach_bottom(self):
@@ -211,6 +256,50 @@ class Environment(object):
                     return True
             
         return False
+
+    # for training
+    def check_empty_columns(self, row, left_col, right_col):
+        # has  empty columns below
+        for j in range(left_col, right_col + 1):
+            if self.background[row, j] == 0:
+                return 1
+        
+        return 0
+
+    # for training
+    def check_higher(self):
+        #tmp_sum = 0
+        for i in range(self.current_height):
+            for j in range(self.width):
+                if self.background[i, j] != 0:
+                    # higher
+                    self.current_height = i
+                    return 1
+        return 0
+        #print tmp_sum
+        # if tmp_sum < self.height_sum:
+        #     self.height_sum = tmp_sum
+        #     return 1
+
+    # for training
+    def check_left_right_empty(self, first_col, last_col, first_row, last_row):
+        # return 1 if left and right both are empty
+        if (first_col == 0) or (last_col == self.width - 1):
+            return 0
+        for i in range(first_row, last_row + 1):
+            if self.background[i, first_col - 1] != 0 and self.background[i, last_col + 1] != 0:
+                return 0
+        return 1
+
+    # for training
+    def fillBackgroundGrid(self, first_col, last_col, first_row, last_row):
+        fillGridNum = 0
+        #print first_col, last_col, first_row, last_row
+        for i in range(first_row, last_row + 1):
+            for j in range(first_col, last_col + 1):
+                if self.background[i, j] != 0:
+                    fillGridNum += 1
+        return fillGridNum
 
     def _check_full(self, row):
         # return 0 if row-th is not full
@@ -242,9 +331,9 @@ class Block(object):
     
     def _set_init_position(self):
         # set last row of block to be the first row of env,
-        # so centor is self.realValues.shape[0] - self.centor[0]
+        # so centor is self.realValues.shape[0] - self.centor[0] + 1
         self.getRealValue()
-        self.y = self.centor[0]
+        self.y = self.realValues.shape[0] - self.centor[0] + 1
     
     def move(self, action):
         # -1: left, 1: right

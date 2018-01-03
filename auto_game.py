@@ -6,9 +6,11 @@ import time
 
 
 class DQNGame(object):
-    def __init__(self, epochs = 1000):
+    def __init__(self, height, width, epochs = 100000):
         self.epochs = epochs
-        self.network = DQN()
+        self.height = height
+        self.width = width
+        self.network = DQN(self.height, self.width)
 
     def preprocess(self, matrix):
         # matrix is screen value
@@ -16,15 +18,15 @@ class DQNGame(object):
 
         # state(binary)
         input_matrix = (matrix != np.zeros(size)).astype(int)
-        input_matrix = input_matrix.reshape((20, 16, 1))
+        input_matrix = input_matrix.reshape((self.height, self.width, 1))
         return input_matrix
 
     def start(self):
         print '---------------------------------------'
         for epoch in range(self.epochs):
             step = 0
-            self.vis = GUI(20, 16)
-            self.env = Environment(20, 16, self.vis.draw)
+            self.vis = GUI(self.height, self.width)
+            self.env = Environment(self.height, self.width, self.vis.draw)
             # get initial state
             spaces, score, gameover = self.env.getGameState()
             observation = self.preprocess(spaces)
@@ -36,17 +38,18 @@ class DQNGame(object):
                         sys.exit()
 
                 action = self.network.chooseAction(observation)
-                print action
+                #print action
                 #print 'action: ', action
                 self.env.takeAction(action)
                 spaces_, score, gameover = self.env.getGameState()
                 observation_ = self.preprocess(spaces_)
                 reward = score - last_score
-                print 'reward: ', reward
+                #if reward != 0:
+                    #print 'reward: ', reward
 
                 self.network.store(observation, action, reward, observation_)
 
-                if (step > 200) and (step % 5 == 0):
+                if (step > 100) and (step % 5 == 0):
                     self.network.learn()
                 
                 observation = observation_
@@ -56,7 +59,8 @@ class DQNGame(object):
                 step += 1
                 time.sleep(0.004)
             #env.destroy()
+        print 'training over'
 
 if __name__ == '__main__':
-    game = DQNGame()
+    game = DQNGame(20, 10)
     game.start()

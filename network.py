@@ -4,20 +4,23 @@ from collections import deque
 from environment import ActionMap
 
 class DQN(object):
-    def __init__(self):
+    def __init__(self, height, width):
         #self.createNetwork()
         self.lr = 0.01
         self.gamma = 0.9
         self.epsilion = 0.9
-        self.memory_size = 500
+        self.memory_size = 100
         self.memory_counter = 0
         self.replace_target_iter = 300
         self.batch_size = 32
         self.learn_step_counter = 0
+        self.save_period = 1000
         self.action_num = 4 # left, right, rotate, noAction
+        self.height = height
+        self.width = width
 
         # memory restore [s, a, r, s']
-        self.memory = [np.zeros((20, 16, 1)), 1, 1, np.zeros((20, 16, 1))] * self.memory_size
+        self.memory = [np.zeros((self.height, self.width, 1)), 1, 1, np.zeros((self.height, self.width, 1))] * self.memory_size
         #self.memory = np.zeros((self.memory_size, 20 * 16 * 2 + 2))
 
         self.cnnNetwork()
@@ -31,11 +34,12 @@ class DQN(object):
 
         tf.summary.FileWriter('logs/', self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
+        self.saver = tf.train.Saver()
     
     def cnnNetwork(self):
 
-        self.s = tf.placeholder(tf.float32, [None, 20, 16, 1], name='s')
-        self.s_ = tf.placeholder(tf.float32, [None, 20, 16, 1], name='s')
+        self.s = tf.placeholder(tf.float32, [None, self.height, self.width, 1], name='s')
+        self.s_ = tf.placeholder(tf.float32, [None, self.height, self.width, 1], name='s')
         self.r = tf.placeholder(tf.float32, [None, ], name='s')
         self.a = tf.placeholder(tf.int32, [None, ], name='a')
 
@@ -50,23 +54,23 @@ class DQN(object):
             b_conv1 = tf.get_variable('b1', [32], dtype=tf.float32, initializer=b_initializer, collections=collection1)
             w_conv2 = tf.get_variable('w2', [3, 3, 32, 64], dtype=tf.float32, initializer=w_initializer, collections=collection1)
             b_conv2 = tf.get_variable('b2', [64], dtype=tf.float32, initializer=b_initializer, collections=collection1)
-            w_fc3 = tf.get_variable('w3', [2240, 128], dtype=tf.float32, initializer=w_initializer, collections=collection1)
-            b_fc3 = tf.get_variable('b3', [128], dtype=tf.float32, initializer=b_initializer, collections=collection1)
-            w_out = tf.get_variable('w_out', [128, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection1)
+            w_fc3 = tf.get_variable('w3', [896, 64], dtype=tf.float32, initializer=w_initializer, collections=collection1)
+            b_fc3 = tf.get_variable('b3', [64], dtype=tf.float32, initializer=b_initializer, collections=collection1)
+            w_out = tf.get_variable('w_out', [64, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection1)
             b_out = tf.get_variable('b_out', [self.action_num], dtype=tf.float32, initializer=b_initializer, collections=collection1)
 
-            # 9 x 7
+            # 9 x 4
             conv1 = tf.nn.relu(tf.nn.conv2d(self.s, 
                                         w_conv1, 
                                         strides=[1, 2, 2, 1],
                                         padding='VALID') + b_conv1)
-            # 7 x 5
+            # 7 x 2
             conv2 = tf.nn.relu(tf.nn.conv2d(conv1, 
                                         w_conv2, 
                                         strides=[1, 1, 1, 1],
                                         padding='VALID') + b_conv2)
             
-            conv2_flat = tf.reshape(conv2, [-1, 2240])
+            conv2_flat = tf.reshape(conv2, [-1, 896])
             fc3 = tf.nn.relu(tf.matmul(conv2_flat, w_fc3) + b_fc3)
 
             self.q_eval = tf.matmul(fc3, w_out) + b_out
@@ -79,9 +83,9 @@ class DQN(object):
             b_conv1 = tf.get_variable('b1', [32], dtype=tf.float32, initializer=b_initializer, collections=collection2)
             w_conv2 = tf.get_variable('w2', [3, 3, 32, 64], dtype=tf.float32, initializer=w_initializer, collections=collection2)
             b_conv2 = tf.get_variable('b2', [64], dtype=tf.float32, initializer=b_initializer, collections=collection2)
-            w_fc3 = tf.get_variable('w3', [2240, 128], dtype=tf.float32, initializer=w_initializer, collections=collection2)
-            b_fc3 = tf.get_variable('b3', [128], dtype=tf.float32, initializer=b_initializer, collections=collection2)
-            w_out = tf.get_variable('w_out', [128, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection2)
+            w_fc3 = tf.get_variable('w3', [896, 64], dtype=tf.float32, initializer=w_initializer, collections=collection2)
+            b_fc3 = tf.get_variable('b3', [64], dtype=tf.float32, initializer=b_initializer, collections=collection2)
+            w_out = tf.get_variable('w_out', [64, self.action_num], dtype=tf.float32, initializer=w_initializer, collections=collection2)
             b_out = tf.get_variable('b_out', [self.action_num], dtype=tf.float32, initializer=b_initializer, collections=collection2)
 
             # 9 x 7
@@ -95,7 +99,7 @@ class DQN(object):
                                         strides=[1, 1, 1, 1],
                                         padding='VALID') + b_conv2)
             
-            conv2_flat = tf.reshape(conv2, [-1, 2240])
+            conv2_flat = tf.reshape(conv2, [-1, 896])
             fc3 = tf.nn.relu(tf.matmul(conv2_flat, w_fc3) + b_fc3)
 
             self.q_next = tf.matmul(fc3, w_out) + b_out
@@ -105,15 +109,14 @@ class DQN(object):
             self.q_target = tf.stop_gradient(q_target)
         with tf.variable_scope('q_eval'):
             a_indices = tf.stack([tf.range(tf.shape(self.a)[0], dtype=tf.int32), self.a], axis=1)
-            print '--------------------', a_indices
             self.q_eval_wrt_a = tf.gather_nd(params=self.q_eval, indices=a_indices)
 
         # get q for action
         self.cost = tf.reduce_mean(tf.squared_difference(self.q_target, self.q_eval_wrt_a, name='TD_error'))
-        self.optimizer = tf.train.AdamOptimizer(1e-6).minimize(self.cost)
+        self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.cost)
 
     def chooseAction(self, observation):
-        observation = observation.reshape(1, 20, 16, 1)
+        observation = observation.reshape(1, self.height, self.width, 1)
         action = None
         if np.random.uniform() < self.epsilion:
             q_values = self.sess.run(self.q_eval, feed_dict={self.s: observation})
@@ -138,10 +141,13 @@ class DQN(object):
 
     def learn(self):
         # replace target parameters
+        #print self.learn_step_counter
         if self.learn_step_counter % self.replace_target_iter == 0:
+            print 'update'
             self.sess.run(self.target_replace_op)
 
         if self.memory_counter > self.memory_size:
+            print self.memory_counter
             sample_index = np.random.choice(self.memory_size, size=self.batch_size)
         else:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
@@ -154,9 +160,6 @@ class DQN(object):
             batch_a.append(self.memory[i][1].value)
             batch_r.append(self.memory[i][2])
             batch_s_.append(self.memory[i][3])
-        #print batch_s_
-        #print len(batch_s_)
-        #print len(batch_s_[0])
         _, cost = self.sess.run([self.optimizer, self.cost],
                                      feed_dict={self.s: batch_s,
                                                 self.a: batch_a,
@@ -165,6 +168,8 @@ class DQN(object):
                                                 })
         
         self.learn_step_counter += 1
+        if self.learn_step_counter % self.save_period == 1:
+            self.saver.save(self.sess, 'models')
     
 
 
